@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+*.db
+.env
+.DS_Store
+client/dist/
+server/dist/
+config/github.config.json

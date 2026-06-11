@@ -1,0 +1,86 @@
+name: IAI Test UI — CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build & Type-check
+    runs-on: [self-hosted, macOS, iai-runner]
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: Install server deps
+        run: cd server && npm ci
+
+      - name: Install client deps
+        run: cd client && npm ci
+
+      - name: Type-check server
+        run: cd server && npx tsc --noEmit
+
+      - name: Type-check client
+        run: cd client && npx tsc --noEmit
+
+      - name: Build client
+        run: cd client && npm run build
+
+      - name: Upload client build
+        uses: actions/upload-artifact@v4
+        with:
+          name: client-dist-${{ github.run_number }}
+          path: client/dist/
+          retention-days: 7
+
+  health-check:
+    name: Server Health Check
+    runs-on: [self-hosted, macOS, iai-runner]
+    needs: build
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install server deps
+        run: cd server && npm ci
+
+      - name: Start server and check health
+        env:
+          PORT: 4099
+        run: |
+          cd server
+          # Start server in background with a temp config
+          PW_AUTO_JWT_SECRET=ci-test-secret tsx src/index.ts &
+          SERVER_PID=$!
+          sleep 5
+
+          # Health check
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4099/api/health)
+          kill $SERVER_PID 2>/dev/null || true
+
+          if [ "$STATUS" = "200" ]; then
+            echo "✅ Health check passed (HTTP $STATUS)"
+          else
+            echo "❌ Health check failed (HTTP $STATUS)"
+            exit 1
+          fi
