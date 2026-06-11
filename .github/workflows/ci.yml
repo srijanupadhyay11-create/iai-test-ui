@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     name: Build & Type-check
-    runs-on: [self-hosted, macOS, iai-runner]
+    runs-on: self-hosted
     timeout-minutes: 15
 
     steps:
