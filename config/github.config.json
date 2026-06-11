@@ -1,0 +1,18 @@
+{
+  "github": {
+    "owner": "srijanupadhyay11-create",
+    "repo": "playwright-automation-framework",
+    "branch": "main",
+    "testsPath": "tests",
+    "token": ""
+  },
+  "playwright": {
+    "localFrameworkPath": "/Users/srijanu/Git/playwright-automation-framework",
+    "reportOutputDir": "playwright-report",
+    "traceOutputDir": "test-results"
+  },
+  "server": {
+    "port": 4000,
+    "jwtSecret": ""
+  }
+}
