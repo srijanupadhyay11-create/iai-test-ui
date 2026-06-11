@@ -6,3 +6,4 @@ data/
 .DS_Store
 client/dist/
 server/dist/
+config/github.config.json
