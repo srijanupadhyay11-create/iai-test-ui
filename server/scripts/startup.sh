@@ -17,7 +17,7 @@ if [ ! -d "$FRAMEWORK_DIR/.git" ]; then
   cd "$FRAMEWORK_DIR" && npm ci
 
   echo "[startup] Installing Playwright Chromium browser..."
-  npx playwright install --with-deps chromium
+  npx playwright install chromium
 
   echo "[startup] Framework ready at $FRAMEWORK_DIR"
 else
