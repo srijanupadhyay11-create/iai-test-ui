@@ -7,44 +7,35 @@ import { startTestRun, stopTestRun } from '../services/test-runner.service.js';
 const router = Router();
 router.use(requireAuth as any);
 
-router.get('/', (req: AuthRequest, res: Response) => {
-  const tests = db.prepare(`
-    SELECT * FROM test_cases ORDER BY file_path, name
-  `).all();
-  res.json(tests);
+router.get('/', async (req: AuthRequest, res: Response) => {
+  const result = await db.execute('SELECT * FROM test_cases ORDER BY file_path, name');
+  res.json(result.rows);
 });
 
 router.post('/import', async (req: AuthRequest, res: Response) => {
   try {
     const tests = await importTestsFromGitHub();
 
-    const importMany = db.transaction((items: typeof tests) => {
-      if (items.length > 0) {
-        // Sync: remove test_cases whose file_path no longer exists in GitHub.
-        // runs.ts uses LEFT JOIN so orphaned test_run_results rows won't crash anything.
-        const incomingPaths = [...new Set(items.map(t => t.file_path))];
-        const placeholders = incomingPaths.map(() => '?').join(',');
-        (db.prepare(`
-          DELETE FROM test_cases
-          WHERE file_path NOT IN (${placeholders})
-        `) as any).run(...incomingPaths);
-      }
+    if (tests.length > 0) {
+      const incomingPaths = [...new Set(tests.map(t => t.file_path))];
+      const placeholders = incomingPaths.map(() => '?').join(',');
+      await db.execute({
+        sql: `DELETE FROM test_cases WHERE file_path NOT IN (${placeholders})`,
+        args: incomingPaths,
+      });
+    }
 
-      // Upsert all incoming tests
-      const upsert = db.prepare(`
-        INSERT INTO test_cases (name, file_path, describe_block)
-        VALUES (?, ?, ?)
-        ON CONFLICT(name, file_path) DO UPDATE SET describe_block = excluded.describe_block
-      `);
-      for (const t of items) {
-        upsert.run(t.name, t.file_path, t.describe_block);
-      }
-    });
+    for (const t of tests) {
+      await db.execute({
+        sql: `INSERT INTO test_cases (name, file_path, describe_block)
+              VALUES (?, ?, ?)
+              ON CONFLICT(name, file_path) DO UPDATE SET describe_block = excluded.describe_block`,
+        args: [t.name, t.file_path, t.describe_block],
+      });
+    }
 
-    importMany(tests);
-
-    const allTests = db.prepare('SELECT * FROM test_cases ORDER BY file_path, name').all();
-    res.json({ imported: tests.length, tests: allTests });
+    const allTests = await db.execute('SELECT * FROM test_cases ORDER BY file_path, name');
+    res.json({ imported: tests.length, tests: allTests.rows });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -65,9 +56,9 @@ router.post('/run', async (req: AuthRequest, res: Response) => {
   }
 });
 
-router.post('/stop/:runId', (req: AuthRequest, res: Response) => {
+router.post('/stop/:runId', async (req: AuthRequest, res: Response) => {
   const { runId } = req.params;
-  const stopped = stopTestRun(runId);
+  const stopped = await stopTestRun(runId);
   if (stopped) {
     res.json({ message: `Run ${runId} stopped` });
   } else {

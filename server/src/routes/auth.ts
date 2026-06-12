@@ -15,16 +15,17 @@ router.post('/register', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Required fields missing' });
   }
 
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-  if (existing) {
+  const existing = await db.execute({ sql: 'SELECT id FROM users WHERE email = ?', args: [email] });
+  if (existing.rows.length > 0) {
     return res.status(409).json({ error: 'Email already registered' });
   }
 
   const password_hash = await bcrypt.hash(password, 10);
-  db.prepare(`
-    INSERT INTO users (first_name, last_name, email, phone, dob, organisation, password_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(first_name, last_name || '', email, phone, dob, organisation || '', password_hash);
+  await db.execute({
+    sql: `INSERT INTO users (first_name, last_name, email, phone, dob, organisation, password_hash)
+          VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    args: [first_name, last_name || '', email, phone, dob, organisation || '', password_hash],
+  });
 
   return res.status(201).json({ message: 'Registration successful' });
 });
@@ -36,12 +37,13 @@ router.post('/login', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Email and password are required' });
   }
 
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as any;
+  const result = await db.execute({ sql: 'SELECT * FROM users WHERE email = ?', args: [email] });
+  const user = result.rows[0] as any;
   if (!user) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
-  const valid = await bcrypt.compare(password, user.password_hash);
+  const valid = await bcrypt.compare(password, user.password_hash as string);
   if (!valid) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }

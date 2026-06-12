@@ -8,8 +8,8 @@ import config from '../config.js';
 const router = Router();
 router.use(requireAuth as any);
 
-router.get('/', (req: AuthRequest, res: Response) => {
-  const runs = db.prepare(`
+router.get('/', async (req: AuthRequest, res: Response) => {
+  const result = await db.execute(`
     SELECT tr.*,
            GROUP_CONCAT(tc.name, '|||') as test_names
     FROM test_runs tr
@@ -17,9 +17,9 @@ router.get('/', (req: AuthRequest, res: Response) => {
     LEFT JOIN test_cases tc ON trr.test_case_id = tc.id
     GROUP BY tr.run_id
     ORDER BY tr.started_at DESC
-  `).all();
+  `);
 
-  const formatted = (runs as any[]).map(r => ({
+  const formatted = result.rows.map((r: any) => ({
     ...r,
     test_names: r.test_names ? r.test_names.split('|||') : [],
   }));
@@ -27,30 +27,30 @@ router.get('/', (req: AuthRequest, res: Response) => {
   res.json(formatted);
 });
 
-router.get('/:runId', (req: AuthRequest, res: Response) => {
+router.get('/:runId', async (req: AuthRequest, res: Response) => {
   const { runId } = req.params;
 
-  const run = db.prepare('SELECT * FROM test_runs WHERE run_id = ?').get(runId);
-  if (!run) return res.status(404).json({ error: 'Run not found' });
+  const runResult = await db.execute({ sql: 'SELECT * FROM test_runs WHERE run_id = ?', args: [runId] });
+  if (runResult.rows.length === 0) return res.status(404).json({ error: 'Run not found' });
 
-  const results = db.prepare(`
-    SELECT trr.*,
-      COALESCE(tc.name, '[deleted]') as name,
-      COALESCE(tc.file_path, '') as file_path,
-      COALESCE(tc.describe_block, '') as describe_block
-    FROM test_run_results trr
-    LEFT JOIN test_cases tc ON trr.test_case_id = tc.id
-    WHERE trr.run_id = ?
-    ORDER BY tc.file_path, tc.name
-  `).all(runId);
+  const results = await db.execute({
+    sql: `SELECT trr.*,
+            COALESCE(tc.name, '[deleted]') as name,
+            COALESCE(tc.file_path, '') as file_path,
+            COALESCE(tc.describe_block, '') as describe_block
+          FROM test_run_results trr
+          LEFT JOIN test_cases tc ON trr.test_case_id = tc.id
+          WHERE trr.run_id = ?
+          ORDER BY tc.file_path, tc.name`,
+    args: [runId],
+  });
 
-  res.json({ run, results });
+  res.json({ run: runResult.rows[0], results: results.rows });
 });
 
 // DELETE /api/runs — clear all run history, per-run HTML reports, and reset
 // test-case statuses back to never_run.
-router.delete('/', (req: AuthRequest, res: Response) => {
-  // Remove per-run report folders
+router.delete('/', async (req: AuthRequest, res: Response) => {
   const reportsDir = path.join(config.playwright.localFrameworkPath, 'playwright-reports');
   if (existsSync(reportsDir)) {
     try {
@@ -60,13 +60,9 @@ router.delete('/', (req: AuthRequest, res: Response) => {
     }
   }
 
-  // Clear DB tables and reset test statuses
-  db.prepare('DELETE FROM test_run_results').run();
-  db.prepare('DELETE FROM test_runs').run();
-  db.prepare(`
-    UPDATE test_cases
-    SET last_status = 'never_run', last_run_id = NULL, last_duration = NULL
-  `).run();
+  await db.execute('DELETE FROM test_run_results');
+  await db.execute('DELETE FROM test_runs');
+  await db.execute(`UPDATE test_cases SET last_status = 'never_run', last_run_id = NULL, last_duration = NULL`);
 
   res.json({ message: 'All run history cleared.' });
 });

@@ -120,22 +120,29 @@ function copyReportForRun(runId: string): void {
 
 export async function startTestRun(options: RunOptions): Promise<string> {
   const { testIds, mode, workers = 1, headed = false } = options;
-  const runId = nextRunId();
+  const runId = await nextRunId();
 
-  const testCases = testIds
-    .map(id => db.prepare('SELECT * FROM test_cases WHERE id = ?').get(id) as TestCase)
+  const tcResults = await Promise.all(
+    testIds.map(id => db.execute({ sql: 'SELECT * FROM test_cases WHERE id = ?', args: [id] }))
+  );
+  const testCases = tcResults
+    .map(r => r.rows[0] as unknown as TestCase)
     .filter(Boolean);
 
-  db.prepare(`
-    INSERT INTO test_runs (run_id, status, mode, workers, total_tests)
-    VALUES (?, 'in_progress', ?, ?, ?)
-  `).run(runId, mode, workers, testCases.length);
+  await db.execute({
+    sql: `INSERT INTO test_runs (run_id, status, mode, workers, total_tests) VALUES (?, 'in_progress', ?, ?, ?)`,
+    args: [runId, mode, workers, testCases.length],
+  });
 
   for (const tc of testCases) {
-    db.prepare(`INSERT INTO test_run_results (run_id, test_case_id, status) VALUES (?, ?, 'in_progress')`)
-      .run(runId, tc.id);
-    db.prepare(`UPDATE test_cases SET last_status = 'in_progress', last_run_id = ? WHERE id = ?`)
-      .run(runId, tc.id);
+    await db.execute({
+      sql: `INSERT INTO test_run_results (run_id, test_case_id, status) VALUES (?, ?, 'in_progress')`,
+      args: [runId, tc.id],
+    });
+    await db.execute({
+      sql: `UPDATE test_cases SET last_status = 'in_progress', last_run_id = ? WHERE id = ?`,
+      args: [runId, tc.id],
+    });
   }
 
   broadcast({ type: 'run_started', runId, testIds, mode, workers });
@@ -193,79 +200,79 @@ export async function startTestRun(options: RunOptions): Promise<string> {
 
   proc.on('close', (code) => {
     activeProcesses.delete(runId);
-
-    // Copy the freshly-generated HTML report into a per-run folder so later
-    // runs don't overwrite it.
     copyReportForRun(runId);
 
     const jsonResults = readResultsJson();
     const suites: any[] = jsonResults?.suites ?? [];
 
-    let passed = 0;
-    let failed = 0;
+    // Async DB writes inside the close callback
+    (async () => {
+      let passed = 0;
+      let failed = 0;
 
-    for (const tc of testCases) {
-      let resolved: ResolvedResult;
-      if (code === null) {
-        // Process was killed (stopped by user)
-        resolved = { status: 'failed', duration: null, tracePath: null, output: fullOutput };
-      } else {
-        resolved = resolveTestResult(suites, tc);
+      for (const tc of testCases) {
+        let resolved: ResolvedResult;
+        if (code === null) {
+          resolved = { status: 'failed', duration: null, tracePath: null, output: fullOutput };
+        } else {
+          resolved = resolveTestResult(suites, tc);
+        }
+
+        const status = code === null ? 'stopped' : resolved.status;
+
+        await db.execute({
+          sql: `UPDATE test_run_results
+                SET status = ?, output = ?, trace_path = ?, duration = ?, completed_at = CURRENT_TIMESTAMP
+                WHERE run_id = ? AND test_case_id = ?`,
+          args: [status, resolved.output || fullOutput, resolved.tracePath ?? null, resolved.duration ?? null, runId, tc.id],
+        });
+
+        await db.execute({
+          sql: 'UPDATE test_cases SET last_status = ?, last_duration = ? WHERE id = ?',
+          args: [status, resolved.duration ?? null, tc.id],
+        });
+
+        broadcast({ type: 'test_update', runId, testCaseId: tc.id, status, duration: resolved.duration });
+
+        if (status === 'passed') passed++;
+        else failed++;
       }
 
-      const status = code === null ? 'stopped' : resolved.status;
-
-      db.prepare(`
-        UPDATE test_run_results
-        SET status = ?, output = ?, trace_path = ?, duration = ?, completed_at = CURRENT_TIMESTAMP
-        WHERE run_id = ? AND test_case_id = ?
-      `).run(status, resolved.output || fullOutput, resolved.tracePath, resolved.duration, runId, tc.id);
-
-      db.prepare('UPDATE test_cases SET last_status = ?, last_duration = ? WHERE id = ?')
-        .run(status, resolved.duration, tc.id);
-
-      broadcast({ type: 'test_update', runId, testCaseId: tc.id, status, duration: resolved.duration });
-
-      if (status === 'passed') passed++;
-      else failed++;
-    }
-
-    finalizeRun(runId, passed, failed, testCases.length);
+      await finalizeRun(runId, passed, failed, testCases.length);
+    })().catch(err => console.error('[runner] Error finalising run:', err));
   });
 
   return runId;
 }
 
-function finalizeRun(runId: string, passed: number, failed: number, total: number) {
+async function finalizeRun(runId: string, passed: number, failed: number, total: number) {
   const overallStatus = failed === 0 ? 'passed' : 'failed';
-  db.prepare(`
-    UPDATE test_runs
-    SET status = ?, passed_tests = ?, failed_tests = ?, completed_at = CURRENT_TIMESTAMP
-    WHERE run_id = ?
-  `).run(overallStatus, passed, failed, runId);
-
+  await db.execute({
+    sql: `UPDATE test_runs SET status = ?, passed_tests = ?, failed_tests = ?, completed_at = CURRENT_TIMESTAMP WHERE run_id = ?`,
+    args: [overallStatus, passed, failed, runId],
+  });
   broadcast({ type: 'run_completed', runId, status: overallStatus, passed, failed, total });
 }
 
-export function stopTestRun(runId: string): boolean {
+export async function stopTestRun(runId: string): Promise<boolean> {
   const proc = activeProcesses.get(runId);
   if (!proc) return false;
 
   proc.kill('SIGTERM');
   activeProcesses.delete(runId);
 
-  db.prepare(`
-    UPDATE test_run_results SET status = 'stopped', completed_at = CURRENT_TIMESTAMP
-    WHERE run_id = ? AND status = 'in_progress'
-  `).run(runId);
-  db.prepare(`
-    UPDATE test_cases SET last_status = 'stopped'
-    WHERE last_run_id = ? AND last_status = 'in_progress'
-  `).run(runId);
-  db.prepare(`
-    UPDATE test_runs SET status = 'stopped', completed_at = CURRENT_TIMESTAMP
-    WHERE run_id = ? AND status = 'in_progress'
-  `).run(runId);
+  await db.execute({
+    sql: `UPDATE test_run_results SET status = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE run_id = ? AND status = 'in_progress'`,
+    args: [runId],
+  });
+  await db.execute({
+    sql: `UPDATE test_cases SET last_status = 'stopped' WHERE last_run_id = ? AND last_status = 'in_progress'`,
+    args: [runId],
+  });
+  await db.execute({
+    sql: `UPDATE test_runs SET status = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE run_id = ? AND status = 'in_progress'`,
+    args: [runId],
+  });
   broadcast({ type: 'run_stopped', runId });
 
   return true;

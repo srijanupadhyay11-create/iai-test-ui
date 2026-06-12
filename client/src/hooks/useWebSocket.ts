@@ -1,7 +1,10 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { WsEvent } from '../types';
 
-const WS_URL = `ws://${window.location.hostname}:4000`;
+// In dev the server is on :4000; in production the client is served from the same Express server.
+const WS_URL = import.meta.env.DEV
+  ? `ws://${window.location.hostname}:4000`
+  : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 
 export function useWebSocket(onEvent: (event: WsEvent) => void) {
   const wsRef = useRef<WebSocket | null>(null);

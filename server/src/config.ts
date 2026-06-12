@@ -8,9 +8,10 @@ const CONFIG_PATH = path.join(__dirname, '../../config/github.config.json');
 
 const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
 
-// Secrets are injected via environment variables (GitHub Secrets / local .env).
-// These override any value in the config file so the JSON is safe to commit.
-if (process.env.PW_AUTO_GITHUB_TOKEN) config.github.token    = process.env.PW_AUTO_GITHUB_TOKEN;
-if (process.env.PW_AUTO_JWT_SECRET)   config.server.jwtSecret = process.env.PW_AUTO_JWT_SECRET;
+// Secrets and runtime overrides via environment variables.
+if (process.env.PW_AUTO_GITHUB_TOKEN)  config.github.token                   = process.env.PW_AUTO_GITHUB_TOKEN;
+if (process.env.PW_AUTO_JWT_SECRET)    config.server.jwtSecret               = process.env.PW_AUTO_JWT_SECRET;
+if (process.env.PW_FRAMEWORK_PATH)     config.playwright.localFrameworkPath  = process.env.PW_FRAMEWORK_PATH;
+if (process.env.PORT)                  config.server.port                    = parseInt(process.env.PORT, 10);
 
 export default config;

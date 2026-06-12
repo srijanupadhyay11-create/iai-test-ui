@@ -13,6 +13,6 @@
   },
   "server": {
     "port": 4000,
-    "jwtSecret": ""
+    "jwtSecret": "iai-test-secret-key-change-in-production"
   }
 }
