@@ -3,8 +3,8 @@ services:
     name: iai-test-ui
     runtime: node
     plan: free
-    buildCommand: (cd server && npm install) && (cd client && npm install) && (cd client && npm run build)
-    startCommand: NODE_ENV=production bash server/scripts/startup.sh
+    buildCommand: (cd server && npm install) && (cd client && npm install --include=dev) && (cd client && npm run build)
+    startCommand: bash server/scripts/startup.sh
     envVars:
       - key: PW_FRAMEWORK_PATH
         value: /opt/render/project/playwright-automation-framework
@@ -12,7 +12,5 @@ services:
         sync: false
       - key: PW_AUTO_JWT_SECRET
         sync: false
-      - key: TURSO_DB_URL
-        sync: false
-      - key: TURSO_AUTH_TOKEN
+      - key: DATABASE_URL
         sync: false

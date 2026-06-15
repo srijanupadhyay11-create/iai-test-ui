@@ -37,15 +37,8 @@ function readResultsJson(): any {
   }
 }
 
-// Playwright's JSON reporter structure (v1.30+):
-//   suite → suites[] → specs[] → { title, ok, tests[] → results[] }
-// "specs" are the individual test definitions; "tests" inside a spec are
-// per-project instances; "results" inside a test are per-retry attempts.
-// "ok: true" on a spec means the test ultimately passed (all retries considered).
-
 function findSpec(suites: any[], tc: TestCase): any | null {
   for (const suite of (suites ?? [])) {
-    // Match at the describe-block level
     for (const spec of (suite.specs ?? [])) {
       if (
         spec.title === tc.name &&
@@ -80,10 +73,7 @@ function resolveTestResult(suites: any[], tc: TestCase): ResolvedResult {
     return { status: 'failed', duration: null, tracePath: null, output: '' };
   }
 
-  // spec.ok is Playwright's authoritative pass/fail (accounts for all retries)
   const status: 'passed' | 'failed' = spec.ok ? 'passed' : 'failed';
-
-  // Flatten all results across all per-project test instances
   const allResults: any[] = (spec.tests ?? []).flatMap((t: any) => t.results ?? []);
   const lastResult = allResults[allResults.length - 1];
 
@@ -94,12 +84,7 @@ function resolveTestResult(suites: any[], tc: TestCase): ResolvedResult {
     (arr ?? []).map((s: any) => (typeof s === 'string' ? s : (s.text ?? ''))).join('');
   const output = toText(lastResult?.stdout) + toText(lastResult?.stderr);
 
-  return {
-    status,
-    duration: lastResult?.duration ?? null,
-    tracePath,
-    output,
-  };
+  return { status, duration: lastResult?.duration ?? null, tracePath, output };
 }
 
 // ── per-run HTML report copy ────────────────────────────────────────────────
@@ -123,36 +108,28 @@ export async function startTestRun(options: RunOptions): Promise<string> {
   const runId = await nextRunId();
 
   const tcResults = await Promise.all(
-    testIds.map(id => db.execute({ sql: 'SELECT * FROM test_cases WHERE id = ?', args: [id] }))
+    testIds.map(id => db.query('SELECT * FROM test_cases WHERE id = $1', [id]))
   );
-  const testCases = tcResults
-    .map(r => r.rows[0] as unknown as TestCase)
-    .filter(Boolean);
+  const testCases = tcResults.map(r => r.rows[0] as TestCase).filter(Boolean);
 
-  await db.execute({
-    sql: `INSERT INTO test_runs (run_id, status, mode, workers, total_tests) VALUES (?, 'in_progress', ?, ?, ?)`,
-    args: [runId, mode, workers, testCases.length],
-  });
+  await db.query(
+    `INSERT INTO test_runs (run_id, status, mode, workers, total_tests) VALUES ($1, 'in_progress', $2, $3, $4)`,
+    [runId, mode, workers, testCases.length]
+  );
 
   for (const tc of testCases) {
-    await db.execute({
-      sql: `INSERT INTO test_run_results (run_id, test_case_id, status) VALUES (?, ?, 'in_progress')`,
-      args: [runId, tc.id],
-    });
-    await db.execute({
-      sql: `UPDATE test_cases SET last_status = 'in_progress', last_run_id = ? WHERE id = ?`,
-      args: [runId, tc.id],
-    });
+    await db.query(
+      `INSERT INTO test_run_results (run_id, test_case_id, status) VALUES ($1, $2, 'in_progress')`,
+      [runId, tc.id]
+    );
+    await db.query(
+      `UPDATE test_cases SET last_status = 'in_progress', last_run_id = $1 WHERE id = $2`,
+      [runId, tc.id]
+    );
   }
 
   broadcast({ type: 'run_started', runId, testIds, mode, workers });
 
-  // Playwright's internal grep title format (from _grepTitleWithTags in Playwright source):
-  //   "{project} {file-relative-to-testDir} {describe} {testname} @tags"
-  // All joined with spaces. The $ anchor targets the end of the test name so we
-  // match across all browser projects without knowing the project name upfront.
-  // We strip the testDir prefix ("tests/") from file_path so it matches how
-  // Playwright presents the path internally.
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const grepPattern = testCases
     .map(tc => {
@@ -162,13 +139,7 @@ export async function startTestRun(options: RunOptions): Promise<string> {
     })
     .join('|');
 
-  // In parallel mode set workers = number of selected tests so every test gets
-  // its own worker slot and all run simultaneously. Cap at the user-chosen
-  // workers value so they can still limit concurrency if they want.
-  // In serial mode always use 1 worker regardless.
-  const numWorkers = mode === 'parallel'
-    ? Math.min(workers, testCases.length)
-    : 1;
+  const numWorkers = mode === 'parallel' ? Math.min(workers, testCases.length) : 1;
 
   const args = [
     'test',
@@ -178,12 +149,10 @@ export async function startTestRun(options: RunOptions): Promise<string> {
     ...(headed ? ['--headed'] : []),
   ];
 
-  // When running headed, omit CI=1 so Playwright doesn't force headless.
   const env: NodeJS.ProcessEnv = { ...process.env, PW_WORKERS: String(numWorkers) };
   if (!headed) env['CI'] = '1';
 
   const proc = spawn(PLAYWRIGHT_BIN, args, { cwd: FRAMEWORK_PATH, env });
-
   activeProcesses.set(runId, proc);
   let fullOutput = '';
 
@@ -202,35 +171,30 @@ export async function startTestRun(options: RunOptions): Promise<string> {
     activeProcesses.delete(runId);
     copyReportForRun(runId);
 
-    const jsonResults = readResultsJson();
-    const suites: any[] = jsonResults?.suites ?? [];
+    const suites: any[] = readResultsJson()?.suites ?? [];
 
-    // Async DB writes inside the close callback
     (async () => {
       let passed = 0;
       let failed = 0;
 
       for (const tc of testCases) {
-        let resolved: ResolvedResult;
-        if (code === null) {
-          resolved = { status: 'failed', duration: null, tracePath: null, output: fullOutput };
-        } else {
-          resolved = resolveTestResult(suites, tc);
-        }
+        const resolved: ResolvedResult = code === null
+          ? { status: 'failed', duration: null, tracePath: null, output: fullOutput }
+          : resolveTestResult(suites, tc);
 
         const status = code === null ? 'stopped' : resolved.status;
 
-        await db.execute({
-          sql: `UPDATE test_run_results
-                SET status = ?, output = ?, trace_path = ?, duration = ?, completed_at = CURRENT_TIMESTAMP
-                WHERE run_id = ? AND test_case_id = ?`,
-          args: [status, resolved.output || fullOutput, resolved.tracePath ?? null, resolved.duration ?? null, runId, tc.id],
-        });
+        await db.query(
+          `UPDATE test_run_results
+           SET status = $1, output = $2, trace_path = $3, duration = $4, completed_at = CURRENT_TIMESTAMP
+           WHERE run_id = $5 AND test_case_id = $6`,
+          [status, resolved.output || fullOutput, resolved.tracePath ?? null, resolved.duration ?? null, runId, tc.id]
+        );
 
-        await db.execute({
-          sql: 'UPDATE test_cases SET last_status = ?, last_duration = ? WHERE id = ?',
-          args: [status, resolved.duration ?? null, tc.id],
-        });
+        await db.query(
+          'UPDATE test_cases SET last_status = $1, last_duration = $2 WHERE id = $3',
+          [status, resolved.duration ?? null, tc.id]
+        );
 
         broadcast({ type: 'test_update', runId, testCaseId: tc.id, status, duration: resolved.duration });
 
@@ -247,10 +211,10 @@ export async function startTestRun(options: RunOptions): Promise<string> {
 
 async function finalizeRun(runId: string, passed: number, failed: number, total: number) {
   const overallStatus = failed === 0 ? 'passed' : 'failed';
-  await db.execute({
-    sql: `UPDATE test_runs SET status = ?, passed_tests = ?, failed_tests = ?, completed_at = CURRENT_TIMESTAMP WHERE run_id = ?`,
-    args: [overallStatus, passed, failed, runId],
-  });
+  await db.query(
+    `UPDATE test_runs SET status = $1, passed_tests = $2, failed_tests = $3, completed_at = CURRENT_TIMESTAMP WHERE run_id = $4`,
+    [overallStatus, passed, failed, runId]
+  );
   broadcast({ type: 'run_completed', runId, status: overallStatus, passed, failed, total });
 }
 
@@ -261,18 +225,18 @@ export async function stopTestRun(runId: string): Promise<boolean> {
   proc.kill('SIGTERM');
   activeProcesses.delete(runId);
 
-  await db.execute({
-    sql: `UPDATE test_run_results SET status = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE run_id = ? AND status = 'in_progress'`,
-    args: [runId],
-  });
-  await db.execute({
-    sql: `UPDATE test_cases SET last_status = 'stopped' WHERE last_run_id = ? AND last_status = 'in_progress'`,
-    args: [runId],
-  });
-  await db.execute({
-    sql: `UPDATE test_runs SET status = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE run_id = ? AND status = 'in_progress'`,
-    args: [runId],
-  });
+  await db.query(
+    `UPDATE test_run_results SET status = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE run_id = $1 AND status = 'in_progress'`,
+    [runId]
+  );
+  await db.query(
+    `UPDATE test_cases SET last_status = 'stopped' WHERE last_run_id = $1 AND last_status = 'in_progress'`,
+    [runId]
+  );
+  await db.query(
+    `UPDATE test_runs SET status = 'stopped', completed_at = CURRENT_TIMESTAMP WHERE run_id = $1 AND status = 'in_progress'`,
+    [runId]
+  );
   broadcast({ type: 'run_stopped', runId });
 
   return true;

@@ -8,7 +8,7 @@ const router = Router();
 router.use(requireAuth as any);
 
 router.get('/', async (req: AuthRequest, res: Response) => {
-  const result = await db.execute('SELECT * FROM test_cases ORDER BY file_path, name');
+  const result = await db.query('SELECT * FROM test_cases ORDER BY file_path, name');
   res.json(result.rows);
 });
 
@@ -18,23 +18,23 @@ router.post('/import', async (req: AuthRequest, res: Response) => {
 
     if (tests.length > 0) {
       const incomingPaths = [...new Set(tests.map(t => t.file_path))];
-      const placeholders = incomingPaths.map(() => '?').join(',');
-      await db.execute({
-        sql: `DELETE FROM test_cases WHERE file_path NOT IN (${placeholders})`,
-        args: incomingPaths,
-      });
+      const placeholders = incomingPaths.map((_, i) => `$${i + 1}`).join(', ');
+      await db.query(
+        `DELETE FROM test_cases WHERE file_path NOT IN (${placeholders})`,
+        incomingPaths
+      );
     }
 
     for (const t of tests) {
-      await db.execute({
-        sql: `INSERT INTO test_cases (name, file_path, describe_block)
-              VALUES (?, ?, ?)
-              ON CONFLICT(name, file_path) DO UPDATE SET describe_block = excluded.describe_block`,
-        args: [t.name, t.file_path, t.describe_block],
-      });
+      await db.query(
+        `INSERT INTO test_cases (name, file_path, describe_block)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (name, file_path) DO UPDATE SET describe_block = EXCLUDED.describe_block`,
+        [t.name, t.file_path, t.describe_block]
+      );
     }
 
-    const allTests = await db.execute('SELECT * FROM test_cases ORDER BY file_path, name');
+    const allTests = await db.query('SELECT * FROM test_cases ORDER BY file_path, name');
     res.json({ imported: tests.length, tests: allTests.rows });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
