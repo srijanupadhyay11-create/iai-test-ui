@@ -10,6 +10,10 @@ const FRAMEWORK_PATH = config.playwright.localFrameworkPath;
 const PLAYWRIGHT_BIN = path.join(FRAMEWORK_PATH, 'node_modules', '.bin', 'playwright');
 const RESULTS_JSON_PATH = path.join(FRAMEWORK_PATH, 'test-results', 'results.json');
 
+console.log(`[runner] FRAMEWORK_PATH : ${FRAMEWORK_PATH}`);
+console.log(`[runner] PLAYWRIGHT_BIN : ${PLAYWRIGHT_BIN}`);
+console.log(`[runner] Binary exists  : ${existsSync(PLAYWRIGHT_BIN)}`);
+
 const activeProcesses = new Map<string, ChildProcess>();
 
 export interface RunOptions {

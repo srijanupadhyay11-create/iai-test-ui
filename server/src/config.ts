@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -13,5 +13,13 @@ if (process.env.PW_AUTO_GITHUB_TOKEN)  config.github.token                   = p
 if (process.env.PW_AUTO_JWT_SECRET)    config.server.jwtSecret               = process.env.PW_AUTO_JWT_SECRET;
 if (process.env.PW_FRAMEWORK_PATH)     config.playwright.localFrameworkPath  = process.env.PW_FRAMEWORK_PATH;
 if (process.env.PORT)                  config.server.port                    = parseInt(process.env.PORT, 10);
+
+// If the configured framework path doesn't exist (e.g. the Mac dev path was
+// committed but we're running on Render), fall back to the Render default.
+const RENDER_FRAMEWORK_PATH = '/opt/render/project/playwright-automation-framework';
+if (!existsSync(config.playwright.localFrameworkPath) && existsSync(RENDER_FRAMEWORK_PATH)) {
+  console.log(`[config] localFrameworkPath "${config.playwright.localFrameworkPath}" not found — using Render default: ${RENDER_FRAMEWORK_PATH}`);
+  config.playwright.localFrameworkPath = RENDER_FRAMEWORK_PATH;
+}
 
 export default config;
