@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { WsEvent } from '../types';
 
 // In dev the server is on :4000; in production the client is served from the same Express server.
@@ -10,6 +10,7 @@ export function useWebSocket(onEvent: (event: WsEvent) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout>;
@@ -17,6 +18,8 @@ export function useWebSocket(onEvent: (event: WsEvent) => void) {
     function connect() {
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
+
+      ws.onopen = () => setIsConnected(true);
 
       ws.onmessage = (e) => {
         try {
@@ -26,6 +29,7 @@ export function useWebSocket(onEvent: (event: WsEvent) => void) {
       };
 
       ws.onclose = () => {
+        setIsConnected(false);
         reconnectTimer = setTimeout(connect, 3000);
       };
 
@@ -48,5 +52,5 @@ export function useWebSocket(onEvent: (event: WsEvent) => void) {
     }
   }, []);
 
-  return { send };
+  return { send, isConnected };
 }

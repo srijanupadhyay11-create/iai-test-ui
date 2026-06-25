@@ -156,6 +156,23 @@ export async function startTestRun(options: RunOptions): Promise<string> {
   activeProcesses.set(runId, proc);
   let fullOutput = '';
 
+  proc.on('error', (err) => {
+    activeProcesses.delete(runId);
+    const msg = `[ERROR] Failed to start Playwright process: ${err.message}\nCheck that the framework was cloned and 'npm ci' completed in startup.sh.\n`;
+    broadcast({ type: 'run_log', runId, message: msg });
+    (async () => {
+      for (const tc of testCases) {
+        await db.query(
+          `UPDATE test_run_results SET status = 'failed', output = $1, completed_at = CURRENT_TIMESTAMP WHERE run_id = $2 AND test_case_id = $3`,
+          [msg, runId, tc.id]
+        );
+        await db.query('UPDATE test_cases SET last_status = $1 WHERE id = $2', ['failed', tc.id]);
+        broadcast({ type: 'test_update', runId, testCaseId: tc.id, status: 'failed', duration: null });
+      }
+      await finalizeRun(runId, 0, testCases.length, testCases.length);
+    })().catch(e => console.error('[runner] Error handling spawn error:', e));
+  });
+
   proc.stdout?.on('data', (data: Buffer) => {
     const text = data.toString();
     fullOutput += text;

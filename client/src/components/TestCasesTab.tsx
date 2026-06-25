@@ -171,7 +171,35 @@ export default function TestCasesTab() {
     }
   }, [activeRunId]);
 
-  useWebSocket(handleWsEvent);
+  const { isConnected } = useWebSocket(handleWsEvent);
+
+  // Polling fallback: when WS is disconnected and a run is active, poll the API
+  // every 5 s so the UI recovers even if the WebSocket connection drops mid-run.
+  useEffect(() => {
+    if (!activeRunId || isConnected) return;
+
+    async function pollRun() {
+      try {
+        const { run, results } = await api.runs.get(activeRunId!);
+        if (run.status !== 'in_progress') {
+          results.forEach((r: any) => {
+            setTests(prev => prev.map(t =>
+              t.id === r.test_case_id
+                ? { ...t, last_status: r.status, last_duration: r.duration ?? t.last_duration }
+                : t
+            ));
+          });
+          setRunLogs(prev => [...prev, `\n[Poll] Run ${activeRunId} finished with status: ${run.status}\n`]);
+          setActiveRunId(null);
+          setRunningIds(new Set());
+        }
+      } catch {}
+    }
+
+    pollRun();
+    const interval = setInterval(pollRun, 5000);
+    return () => clearInterval(interval);
+  }, [activeRunId, isConnected]);
 
   // ── derived: team summary ─────────────────────────────────────────────────
 

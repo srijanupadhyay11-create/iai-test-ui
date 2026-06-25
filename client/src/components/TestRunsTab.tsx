@@ -66,7 +66,15 @@ export default function TestRunsTab() {
     }
   }, [loadRuns]);
 
-  useWebSocket(handleWsEvent);
+  const { isConnected } = useWebSocket(handleWsEvent);
+
+  // Polling fallback: refresh run list every 5 s when WS is down and a run is in progress.
+  useEffect(() => {
+    const hasActiveRun = runs.some(r => r.status === 'in_progress');
+    if (!hasActiveRun || isConnected) return;
+    const interval = setInterval(loadRuns, 5000);
+    return () => clearInterval(interval);
+  }, [runs, isConnected, loadRuns]);
 
   if (loading) return (
     <div className="flex items-center justify-center py-20">
