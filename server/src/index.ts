@@ -10,6 +10,7 @@ import testsRouter from './routes/tests.js';
 import runsRouter from './routes/runs.js';
 import config from './config.js';
 import { initDb } from './db/database.js';
+import { ensureFramework } from './startup/ensureFramework.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -47,12 +48,15 @@ if (existsSync(clientDist)) {
 const server = http.createServer(app);
 initWebSocket(server);
 
-initDb().then(() => {
-  server.listen(PORT, () => {
-    console.log(`IAI Test server running on http://localhost:${PORT}`);
-    console.log(`WebSocket available at ws://localhost:${PORT}`);
+initDb()
+  .then(() => ensureFramework())
+  .then(() => {
+    server.listen(PORT, () => {
+      console.log(`IAI Test server running on http://localhost:${PORT}`);
+      console.log(`WebSocket available at ws://localhost:${PORT}`);
+    });
+  })
+  .catch(err => {
+    console.error('Failed to initialise database:', err);
+    process.exit(1);
   });
-}).catch(err => {
-  console.error('Failed to initialise database:', err);
-  process.exit(1);
-});
