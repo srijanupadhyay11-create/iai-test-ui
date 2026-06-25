@@ -14,12 +14,11 @@ if (process.env.PW_AUTO_JWT_SECRET)    config.server.jwtSecret               = p
 if (process.env.PW_FRAMEWORK_PATH)     config.playwright.localFrameworkPath  = process.env.PW_FRAMEWORK_PATH;
 if (process.env.PORT)                  config.server.port                    = parseInt(process.env.PORT, 10);
 
-// If localFrameworkPath is a Mac-style path and PW_FRAMEWORK_PATH wasn't
-// explicitly set, we're almost certainly on Render — switch to the Render default
-// immediately, without waiting for the directory to exist.
-if (!process.env.PW_FRAMEWORK_PATH && config.playwright.localFrameworkPath.startsWith('/Users/')) {
+// Render sets RENDER=true automatically. Use it to switch the framework path
+// without breaking local Mac dev (where RENDER is never set).
+if (process.env.RENDER && !process.env.PW_FRAMEWORK_PATH) {
   const renderDefault = '/opt/render/project/playwright-automation-framework';
-  console.log(`[config] Mac path detected — switching localFrameworkPath to: ${renderDefault}`);
+  console.log(`[config] Render env detected — using framework path: ${renderDefault}`);
   config.playwright.localFrameworkPath = renderDefault;
 }
 
