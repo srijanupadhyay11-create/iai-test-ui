@@ -5,14 +5,11 @@ import db, { nextRunId } from '../db/database.js';
 import { broadcast } from './websocket.service.js';
 import config from '../config.js';
 
-const FRAMEWORK_PATH = config.playwright.localFrameworkPath;
-// Use the local playwright binary directly — avoids shell: true and PATH issues
-const PLAYWRIGHT_BIN = path.join(FRAMEWORK_PATH, 'node_modules', '.bin', 'playwright');
-const RESULTS_JSON_PATH = path.join(FRAMEWORK_PATH, 'test-results', 'results.json');
-
-console.log(`[runner] FRAMEWORK_PATH : ${FRAMEWORK_PATH}`);
-console.log(`[runner] PLAYWRIGHT_BIN : ${PLAYWRIGHT_BIN}`);
-console.log(`[runner] Binary exists  : ${existsSync(PLAYWRIGHT_BIN)}`);
+// Read paths dynamically from config so they reflect whatever ensureFramework()
+// resolved — module-level constants would be captured before setup completes.
+const frameworkPath  = () => config.playwright.localFrameworkPath;
+const playwrightBin  = () => path.join(frameworkPath(), 'node_modules', '.bin', 'playwright');
+const resultsJsonPath = () => path.join(frameworkPath(), 'test-results', 'results.json');
 
 const activeProcesses = new Map<string, ChildProcess>();
 
@@ -33,9 +30,9 @@ interface TestCase {
 // ── results.json helpers ────────────────────────────────────────────────────
 
 function readResultsJson(): any {
-  if (!existsSync(RESULTS_JSON_PATH)) return null;
+  if (!existsSync(resultsJsonPath())) return null;
   try {
-    return JSON.parse(readFileSync(RESULTS_JSON_PATH, 'utf-8'));
+    return JSON.parse(readFileSync(resultsJsonPath(), 'utf-8'));
   } catch {
     return null;
   }
@@ -58,7 +55,7 @@ function findSpec(suites: any[], tc: TestCase): any | null {
 }
 
 function getRelativeTracePath(absPath: string): string | null {
-  const testResultsDir = path.join(FRAMEWORK_PATH, 'test-results');
+  const testResultsDir = path.join(frameworkPath(), 'test-results');
   const rel = path.relative(testResultsDir, absPath);
   return rel.startsWith('..') ? null : rel;
 }
@@ -94,9 +91,9 @@ function resolveTestResult(suites: any[], tc: TestCase): ResolvedResult {
 // ── per-run HTML report copy ────────────────────────────────────────────────
 
 function copyReportForRun(runId: string): void {
-  const reportSrc = path.join(FRAMEWORK_PATH, config.playwright.reportOutputDir);
+  const reportSrc = path.join(frameworkPath(), config.playwright.reportOutputDir);
   if (!existsSync(reportSrc)) return;
-  const reportsDir = path.join(FRAMEWORK_PATH, 'playwright-reports');
+  const reportsDir = path.join(frameworkPath(), 'playwright-reports');
   mkdirSync(reportsDir, { recursive: true });
   try {
     cpSync(reportSrc, path.join(reportsDir, runId), { recursive: true });
@@ -110,6 +107,9 @@ function copyReportForRun(runId: string): void {
 export async function startTestRun(options: RunOptions): Promise<string> {
   const { testIds, mode, workers = 1, headed = false } = options;
   const runId = await nextRunId();
+
+  console.log(`[runner] startTestRun — frameworkPath: ${frameworkPath()}`);
+  console.log(`[runner] playwrightBin: ${playwrightBin()} — exists: ${existsSync(playwrightBin())}`);
 
   const tcResults = await Promise.all(
     testIds.map(id => db.query('SELECT * FROM test_cases WHERE id = $1', [id]))
@@ -156,7 +156,7 @@ export async function startTestRun(options: RunOptions): Promise<string> {
   const env: NodeJS.ProcessEnv = { ...process.env, PW_WORKERS: String(numWorkers) };
   if (!headed) env['CI'] = '1';
 
-  const proc = spawn(PLAYWRIGHT_BIN, args, { cwd: FRAMEWORK_PATH, env });
+  const proc = spawn(playwrightBin(), args, { cwd: frameworkPath(), env });
   activeProcesses.set(runId, proc);
   let fullOutput = '';
 
