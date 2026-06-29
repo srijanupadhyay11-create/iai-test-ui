@@ -88,6 +88,23 @@ export async function initDb() {
     INSERT INTO run_counter (id, current_value) VALUES (1, 0)
     ON CONFLICT DO NOTHING
   `);
+
+  // New session: reset every test case to never_run so the Test Cases tab
+  // starts clean. Results accumulate during the session as tests are run.
+  await pool.query(
+    `UPDATE test_cases SET last_status = 'never_run', last_run_id = NULL, last_duration = NULL`
+  );
+
+  // Mark orphaned in-progress runs/results as stopped so Test Runs history
+  // is accurate (no Playwright process survives a server restart).
+  await pool.query(
+    `UPDATE test_run_results SET status = 'stopped', completed_at = CURRENT_TIMESTAMP
+     WHERE status = 'in_progress'`
+  );
+  await pool.query(
+    `UPDATE test_runs SET status = 'stopped', completed_at = CURRENT_TIMESTAMP
+     WHERE status = 'in_progress'`
+  );
 }
 
 export async function nextRunId(): Promise<string> {

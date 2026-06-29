@@ -1,6 +1,6 @@
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
-import { readFileSync, existsSync, mkdirSync, cpSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, cpSync, unlinkSync } from 'fs';
 import db, { nextRunId } from '../db/database.js';
 import { broadcast } from './websocket.service.js';
 import config from '../config.js';
@@ -111,6 +111,10 @@ export async function startTestRun(options: RunOptions): Promise<string> {
   console.log(`[runner] startTestRun — frameworkPath: ${frameworkPath()}`);
   console.log(`[runner] playwrightBin: ${playwrightBin()} — exists: ${existsSync(playwrightBin())}`);
 
+  // Remove stale results.json so a run that finds no matches
+  // doesn't pick up results from a previous run.
+  try { unlinkSync(resultsJsonPath()); } catch {}
+
   const tcResults = await Promise.all(
     testIds.map(id => db.query('SELECT * FROM test_cases WHERE id = $1', [id]))
   );
@@ -152,6 +156,9 @@ export async function startTestRun(options: RunOptions): Promise<string> {
     '--workers', String(numWorkers),
     ...(headed ? ['--headed'] : []),
   ];
+
+  console.log(`[runner] grep pattern: ${grepPattern}`);
+  console.log(`[runner] spawn args: ${JSON.stringify(args)}`);
 
   const env: NodeJS.ProcessEnv = { ...process.env, PW_WORKERS: String(numWorkers) };
   if (!headed) env['CI'] = '1';
