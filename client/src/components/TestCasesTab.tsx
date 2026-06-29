@@ -173,10 +173,10 @@ export default function TestCasesTab() {
 
   const { isConnected } = useWebSocket(handleWsEvent);
 
-  // Polling fallback: when WS is disconnected and a run is active, poll the API
-  // every 5 s so the UI recovers even if the WebSocket connection drops mid-run.
+  // Poll the run status every 5 s as a safety net — even if WS appears
+  // connected, events can be lost on Render's reverse proxy.
   useEffect(() => {
-    if (!activeRunId || isConnected) return;
+    if (!activeRunId) return;
 
     async function pollRun() {
       try {
@@ -199,7 +199,7 @@ export default function TestCasesTab() {
     pollRun();
     const interval = setInterval(pollRun, 5000);
     return () => clearInterval(interval);
-  }, [activeRunId, isConnected]);
+  }, [activeRunId]);
 
   // ── derived: team summary ─────────────────────────────────────────────────
 

@@ -167,7 +167,20 @@ export async function startTestRun(options: RunOptions): Promise<string> {
   activeProcesses.set(runId, proc);
   let fullOutput = '';
 
+  // Kill the process if it hangs longer than 5 minutes (e.g. Chromium can't
+  // launch on Render due to missing system deps). The close handler will
+  // finalize the run as failed.
+  const RUN_TIMEOUT_MS = 5 * 60 * 1000;
+  const timeoutId = setTimeout(() => {
+    if (activeProcesses.has(runId)) {
+      console.log(`[runner] Run ${runId} timed out after ${RUN_TIMEOUT_MS / 1000}s — killing`);
+      fullOutput += '\n[TIMEOUT] Process killed after 5 minutes.\n';
+      proc.kill('SIGTERM');
+    }
+  }, RUN_TIMEOUT_MS);
+
   proc.on('error', (err) => {
+    clearTimeout(timeoutId);
     activeProcesses.delete(runId);
     const msg = `[ERROR] Failed to start Playwright process: ${err.message}\nCheck that the framework was cloned and 'npm ci' completed in startup.sh.\n`;
     broadcast({ type: 'run_log', runId, message: msg });
@@ -196,6 +209,7 @@ export async function startTestRun(options: RunOptions): Promise<string> {
   });
 
   proc.on('close', (code) => {
+    clearTimeout(timeoutId);
     activeProcesses.delete(runId);
     copyReportForRun(runId);
 
